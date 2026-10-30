@@ -1,0 +1,625 @@
+import { Scanner, RESERVED_WORDS } from "./scanner.js";
+import { StatementParser } from "./parser.js";
+import { readType, readTypeParameters } from "./types.js";
+
+const PRECEDENCE = new Map([
+  ["??", 1], ["||", 1], ["&&", 2], ["===", 3], ["!==", 3],
+  ["<", 4], ["<=", 4], [">", 4], [">=", 4], ["instanceof", 4],
+  ["+", 5], ["-", 5], ["*", 6], ["/", 6], ["%", 6],
+]);
+const IDENTIFIER = /[A-Za-z_$][\w$]*/y;
+const NUMBER = /(?:(?:0|[1-9]\d*)(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/y;
+const SYMBOL = /===|!==|==|!=|<=|>=|&&|\|\||\+\+|--|\*\*|=>|\?\?|\?\.|[+\-*/%!=<>]=?|[()[\]{},.;:?`|#@]/y;
+
+export function parseExpression(source, filename, start, end) {
+  const parser = new ExpressionParser(source, filename, start, end);
+  const expression = parser.expression();
+  parser.expect("eof");
+  return expression;
+}
+
+export function patternBindings(pattern, shorthand = false, path = []) {
+  if (!pattern) return [];
+  if (pattern.type === "AssignmentPattern") return patternBindings(pattern.left, shorthand, path);
+  if (pattern.type === "RestElement") return patternBindings(pattern.argument, false, path);
+  if (pattern.type === "Identifier") return [{ id: pattern, shorthand, path }];
+  if (pattern.type === "ArrayPattern") return pattern.elements.flatMap((item, index) => patternBindings(item, false, [...path, index]));
+  return pattern.properties.flatMap(property => property.type === "RestElement" ? patternBindings(property, false, path) : patternBindings(property.value, property.shorthand, [...path, property.key.name ?? property.key.value]));
+}
+
+export function patternExpressions(pattern) {
+  if (!pattern) return [];
+  if (pattern.type === "AssignmentPattern") return [...patternExpressions(pattern.left), pattern.right];
+  if (pattern.type === "RestElement") return patternExpressions(pattern.argument);
+  if (pattern.type === "ArrayPattern") return pattern.elements.flatMap(patternExpressions);
+  if (pattern.type === "ObjectPattern") return pattern.properties.flatMap(property => patternExpressions(property.value ?? property));
+  return [];
+}
+
+export class ExpressionParser {
+  constructor(source, filename, start, end) {
+    this.scanner = new Scanner(source, filename);
+    this.scanner.pos = start;
+    this.end = end;
+    this.current = null;
+  }
+
+  error(message, start = this.scanner.pos) {
+    this.scanner.error("NRS071", message, { start, end: Math.min(start + 1, this.end) });
+  }
+
+  peek() {
+    if (this.current) return this.current;
+    const scanner = this.scanner;
+    while (scanner.pos < this.end) {
+      const code = scanner.src.charCodeAt(scanner.pos);
+      if (code === 32 || (code >= 9 && code <= 13) || (code > 127 && /\s/.test(scanner.peek()))) scanner.pos++;
+      else if (code === 47 && scanner.eat("//")) {
+        while (scanner.pos < this.end && !/[\r\n]/.test(scanner.peek())) scanner.pos++;
+      } else if (code === 47 && scanner.eat("/*")) {
+        scanner.readUntil("*/");
+        if (scanner.pos >= this.end) this.error("Unclosed expression comment");
+        scanner.pos += 2;
+      } else break;
+    }
+    const start = scanner.pos;
+    const char = scanner.peek();
+    const code = scanner.src.charCodeAt(start);
+    let kind;
+    let value;
+    if (start >= this.end) kind = "eof";
+    else if (char === '"' || char === "'") {
+      kind = "string";
+      const quote = char;
+      scanner.pos++;
+      value = this.text(quote);
+      if (!scanner.eat(quote)) this.error("Expected closing quote", start);
+    } else if ((code >= 48 && code <= 57) || (char === "." && scanner.src.charCodeAt(start + 1) >= 48 && scanner.src.charCodeAt(start + 1) <= 57)) {
+      kind = "number";
+      value = Number(scanner.read(NUMBER));
+    } else if ((code >= 65 && code <= 90) || (code >= 97 && code <= 122) || code === 95 || code === 36) {
+      kind = "identifier";
+      value = scanner.read(IDENTIFIER);
+    } else if (scanner.startsWith("...")) {
+      kind = value = "...";
+      scanner.pos += 3;
+    } else if ("()[]{},.:`;".includes(char)) {
+      kind = value = char;
+      scanner.pos++;
+    }
+    else if ((value = scanner.read(SYMBOL)) !== null) kind = value;
+    else this.error(`Unsupported expression token '${scanner.peek()}'`);
+    this.current = { kind, value, start, end: scanner.pos };
+    return this.current;
+  }
+
+  take() {
+    const token = this.peek();
+    this.current = null;
+    return token;
+  }
+
+  eat(kind) {
+    if (this.peek().kind !== kind) return null;
+    return this.take();
+  }
+
+  expect(kind) {
+    const token = this.peek();
+    if (token.kind !== kind) this.error(`Expected '${kind}', found '${token.value ?? token.kind}'`, token.start);
+    return this.take();
+  }
+
+  annotation() {
+    const colon = this.eat(":");
+    if (!colon) return null;
+    const { value, end } = readType(this);
+    return { type: "TypeAnnotation", value, start: colon.start, end };
+  }
+
+  decorators(allowed) {
+    if (this.peek().kind !== "@") return [];
+    const list = [];
+    while (this.peek().kind === "@") {
+      const at = this.take();
+      if (!allowed) this.error("Decorators require a class declaration", at.start);
+      const token = this.peek();
+      if (token.kind !== "identifier" || RESERVED_WORDS.has(token.value)) this.error("Expected a decorator name", token.start);
+      this.take();
+      let expression = { type: "Identifier", name: token.value, start: token.start, end: token.end };
+      while (this.peek().kind === ".") {
+        this.take();
+        const property = this.expect("identifier");
+        expression = { type: "MemberExpression", object: expression, property: { type: "Identifier", name: property.value, start: property.start, end: property.end }, computed: false, start: expression.start, end: property.end };
+      }
+      if (this.eat("(")) {
+        const args = this.list(")", true);
+        expression = { type: "CallExpression", callee: expression, arguments: args.items, start: expression.start, end: args.end };
+      }
+      list.push({ type: "Decorator", expression, start: at.start, end: expression.end });
+    }
+    return list;
+  }
+
+  parameter() {
+    const node = this.expression();
+    const typeAnnotation = this.annotation();
+    return typeAnnotation ? { ...node, typeAnnotation } : node;
+  }
+
+  binding(names, defaults = true, annotation = false) {
+    const token = this.take();
+    let node;
+    if (token.kind === "...") {
+      const argument = this.binding(names, false, annotation);
+      if (argument.type !== "Identifier") this.error("Rest requires an identifier", token.start);
+      return { type: "RestElement", argument, typeAnnotation: argument.typeAnnotation, start: token.start, end: argument.typeAnnotation?.end ?? argument.end };
+    }
+    if (token.kind === "identifier") node = this.pattern({ type: "Identifier", name: token.value, start: token.start, end: token.end }, names);
+    else if (token.kind === "[" || token.kind === "{") {
+      const array = token.kind === "[";
+      const close = array ? "]" : "}";
+      const items = [];
+      while (this.peek().kind !== close) {
+        if (array && this.eat(",")) { items.push(null); continue; }
+        let item;
+        if (array || this.peek().kind === "...") item = this.binding(names);
+        else {
+          const key = this.take();
+          if (!["identifier", "string", "number"].includes(key.kind)) this.error("Expected a binding property", key.start);
+          const property = key.kind === "identifier" ? { type: "Identifier", name: key.value, start: key.start, end: key.end } : { type: "Literal", value: key.value, start: key.start, end: key.end };
+          const shorthand = !this.eat(":");
+          let value;
+          if (shorthand) {
+            if (key.kind !== "identifier") this.error("Expected a binding name", key.start);
+            value = this.pattern({ ...property }, names);
+            if (this.eat("=")) { const right = this.expression(); value = { type: "AssignmentPattern", left: value, right, start: value.start, end: right.end }; }
+          } else value = this.binding(names);
+          item = { type: "Property", key: property, value, shorthand, start: key.start, end: value.end };
+        }
+        items.push(item);
+        if (item.type === "RestElement" && this.peek().kind !== close) this.error("Rest must be last without a trailing comma", item.start);
+        if (!this.eat(",")) break;
+      }
+      node = { type: array ? "ArrayPattern" : "ObjectPattern", [array ? "elements" : "properties"]: items, start: token.start, end: this.expect(close).end };
+    } else this.error("Expected a binding pattern", token.start);
+    if (annotation) {
+      const typeAnnotation = this.annotation();
+      if (typeAnnotation) node.typeAnnotation = typeAnnotation;
+    }
+    if (defaults && this.eat("=")) {
+      const right = this.expression();
+      node = { type: "AssignmentPattern", left: node, right, typeAnnotation: node.typeAnnotation, start: node.start, end: right.end };
+    }
+    return node;
+  }
+
+  parameters() {
+    const items = [];
+    const names = new Set();
+    while (this.peek().kind !== ")") {
+      const item = this.binding(names, true, true);
+      items.push(item);
+      if (item.type === "RestElement" && this.peek().kind !== ")") this.error("Rest must be the last parameter", item.start);
+      if (!this.eat(",")) break;
+    }
+    return { items, end: this.expect(")").end };
+  }
+
+  arrowReturn() {
+    const position = this.scanner.pos;
+    const current = this.current;
+    try {
+      const annotation = this.annotation();
+      if (annotation && this.peek().kind === "=>") return annotation;
+    } catch (error) {
+      if (error.name !== "NiralScriptError") throw error;
+    }
+    this.scanner.pos = position;
+    this.current = current;
+    return null;
+  }
+
+  expression() {
+    const test = this.binary(1);
+    if (this.eat("=>")) {
+      if (test.type !== "Identifier") this.error("A destructured arrow parameter requires parentheses", test.start);
+      return this.arrow([test], test.start, false, test.end);
+    }
+    if (!this.eat("?")) return test;
+    const consequent = this.expression();
+    this.expect(":");
+    const alternate = this.expression();
+    return { type: "ConditionalExpression", test, consequent, alternate, start: test.start, end: alternate.end };
+  }
+
+  binary(minimum) {
+    let left = this.unary();
+    while ((PRECEDENCE.get(this.peek().kind === "identifier" ? this.peek().value : this.peek().kind) ?? 0) >= minimum) {
+      const token = this.take();
+      const operator = token.kind === "identifier" ? token.value : token.kind;
+      const right = this.binary(PRECEDENCE.get(operator) + 1);
+      if (left.type === "ArrowFunctionExpression" || right.type === "ArrowFunctionExpression") this.error("Arrow operands require parentheses", left.start);
+      for (const operand of [left, right]) if (operand.type === "LogicalExpression" && (operator === "??" ? ["&&", "||"].includes(operand.operator) : ["&&", "||"].includes(operator) && operand.operator === "??")) this.error("Mixing ?? with && or || requires parentheses", operand.start);
+      left = {
+        type: ["&&", "||", "??"].includes(operator) ? "LogicalExpression" : "BinaryExpression",
+        operator, left, right, start: left.start, end: right.end,
+      };
+    }
+    return left;
+  }
+
+  unary() {
+    if (this.peek().kind === "identifier" && this.peek().value === "typeof") {
+      const token = this.take();
+      const argument = this.unary();
+      if (argument.type === "ArrowFunctionExpression") this.error("Arrow operands require parentheses", token.start);
+      return { type: "UnaryExpression", operator: "typeof", argument, start: token.start, end: argument.end };
+    }
+    if (this.peek().kind === "identifier" && this.peek().value === "await") {
+      const token = this.take();
+      const argument = this.unary();
+      if (argument.type === "ArrowFunctionExpression") this.error("Arrow operands require parentheses", token.start);
+      return { type: "AwaitExpression", argument, start: token.start, end: argument.end };
+    }
+    if (["!", "+", "-"].includes(this.peek().kind)) {
+      const token = this.take();
+      const argument = this.unary();
+      if (argument.type === "ArrowFunctionExpression") this.error("Arrow operands require parentheses", token.start);
+      return { type: "UnaryExpression", operator: token.kind, argument, start: token.start, end: argument.end };
+    }
+    return this.postfix(this.primary());
+  }
+
+  postfix(expression, construct = false) {
+    if (expression.type === "ArrowFunctionExpression") return expression;
+    while (true) {
+      const optional = !!this.eat("?.");
+      if (construct && optional) this.error("A constructor cannot use optional chaining", expression.start);
+      if (optional && !["[", "("].includes(this.peek().kind) || !optional && this.eat(".")) {
+        const privatePrefix = this.eat("#");
+        const token = this.expect("identifier");
+        const property = { type: "Identifier", name: (privatePrefix ? "#" : "") + token.value, start: privatePrefix?.start ?? token.start, end: token.end };
+        expression = { type: "MemberExpression", ...(optional ? { optional: true } : {}), object: expression, property, computed: false, start: expression.start, end: property.end };
+      } else if (this.eat("[")) {
+        const property = this.expression();
+        const close = this.expect("]");
+        expression = { type: "MemberExpression", ...(optional ? { optional: true } : {}), object: expression, property, computed: true, start: expression.start, end: close.end };
+      } else if (this.peek().kind === "<") {
+        const position = this.scanner.pos;
+        const current = this.current;
+        let typeArguments;
+        try {
+          const opening = this.take();
+          const values = [];
+          do { values.push(readType(this).value); } while (this.eat(","));
+          const close = this.expect(">");
+          if (this.peek().kind === "(") typeArguments = { type: "TypeAnnotation", value: { kind: "arguments", values }, start: opening.start, end: close.end };
+        } catch (error) { if (error.name !== "NiralScriptError") throw error; }
+        if (!typeArguments) { this.scanner.pos = position; this.current = current; return expression; }
+        this.expect("(");
+        const args = this.list(")", true);
+        expression = { type: construct ? "NewExpression" : "CallExpression", callee: expression, arguments: args.items, typeArguments, start: expression.start, end: args.end };
+        if (construct) return expression;
+      } else if (this.eat("(")) {
+        const args = this.list(")", true);
+        expression = { type: construct ? "NewExpression" : "CallExpression", ...(optional ? { optional: true } : {}), callee: expression, arguments: args.items, start: expression.start, end: args.end };
+        if (construct) return expression;
+      } else if (!construct && !optional && this.peek().kind === "identifier" && (this.peek().value === "as" || this.peek().value === "satisfies")) {
+        const keyword = this.take();
+        const typeStart = this.peek().start;
+        const { value, end } = readType(this);
+        const castType = { type: "TypeAnnotation", value, start: typeStart, end };
+        expression = { type: "CastExpression", operator: keyword.value, expression, castType, start: expression.start, end };
+      } else return construct ? { type: "NewExpression", callee: expression, arguments: [], start: expression.start, end: expression.end } : expression;
+    }
+  }
+
+  primary() {
+    const token = this.take();
+    const { start, end, value } = token;
+    if (token.kind === "number" || token.kind === "string") return { type: "Literal", value, start, end };
+    if (token.kind === "identifier") {
+      if (value === "contract" && this.peek().kind === "<") {
+        this.expect("<");
+        const typeStart = this.peek().start;
+        const typeAnnotation = { type: "TypeAnnotation", start: typeStart, ...readType(this) };
+        this.expect(">");
+        this.expect("(");
+        const argument = this.expression();
+        const close = this.expect(")");
+        return { type: "ContractExpression", argument, typeAnnotation, start, end: close.end };
+      }
+      if (value === "this" || value === "super") return { type: value === "this" ? "ThisExpression" : "Super", start, end };
+      if (value === "new") {
+        const constructed = this.postfix(this.primary(), true);
+        if (constructed.type !== "NewExpression" || constructed.optional) this.error("Invalid constructor expression", start);
+        return { ...constructed, start };
+      }
+      if (value === "class") {
+        const parser = new StatementParser(this.scanner.src, this.scanner.filename);
+        parser.scanner.pos = this.scanner.pos;
+        const node = parser.classDeclaration(start, 0, new Set(), true);
+        this.scanner.pos = node.end;
+        this.current = null;
+        return { ...node, type: "ClassExpression" };
+      }
+      if (value === "function") return this.functionExpression(start, false);
+      if (value === "async") {
+        try {
+        const next = this.peek();
+        let params;
+        let parameterEnd;
+        if (next.kind === "<") {
+          if (/[\r\n]/.test(this.scanner.src.slice(end, next.start))) this.error("Async arrow headers require the same line", start);
+          return this.genericArrow(next.start, true);
+        }
+        if (next.kind === "identifier") {
+          const param = this.take();
+          params = [{ type: "Identifier", name: param.value, start: param.start, end: param.end }];
+          parameterEnd = param.end;
+        } else if (this.eat("(")) {
+          const list = this.parameters();
+          params = list.items;
+          parameterEnd = list.end;
+        }
+        const returnType = params ? this.arrowReturn() : null;
+        if (params && this.eat("=>")) {
+          if (/[\r\n]/.test(this.scanner.src.slice(end, next.start))) this.error("Async arrow headers require the same line", start);
+          return this.arrow(params, start, true, parameterEnd, returnType);
+        }
+        } catch (error) { if (error.name !== "NiralScriptError") throw error; }
+        this.scanner.pos = end;
+        this.current = null;
+        if (this.peek().value === "function") {
+          if (/[\r\n]/.test(this.scanner.src.slice(end, this.peek().start))) this.error("Async function headers require the same line", start);
+          this.take();
+          return this.functionExpression(start, true);
+        }
+      }
+      if (["true", "false", "null"].includes(value)) {
+        return { type: "Literal", value: value === "null" ? null : value === "true", start, end };
+      }
+      if (RESERVED_WORDS.has(value)) this.error(`Unsupported expression keyword '${value}'`, start);
+      return { type: "Identifier", name: value, start, end };
+    }
+    // nothing else can open an expression with '<', so a generic arrow needs no backtracking
+    if (token.kind === "<") return this.genericArrow(start, false);
+    if (token.kind === "(") {
+      const savedPosition = this.scanner.pos;
+      const savedCurrent = this.current;
+      try {
+        const parameters = this.parameters();
+        const returnType = this.arrowReturn();
+        if (this.eat("=>")) return this.arrow(parameters.items, start, false, parameters.end, returnType);
+      } catch (error) { if (error.name !== "NiralScriptError") throw error; }
+      this.scanner.pos = savedPosition;
+      this.current = savedCurrent;
+      const params = [];
+      let trailingComma = false;
+      if (this.peek().kind !== ")") {
+        params.push(this.parameter());
+        while (this.eat(",")) {
+          if (this.peek().kind === ")") { trailingComma = true; break; }
+          params.push(this.parameter());
+        }
+      }
+      const close = this.expect(")");
+      const returnType = this.arrowReturn();
+      if (this.eat("=>")) return this.arrow(params, start, false, close.end, returnType);
+      if (returnType || params.some(param => param.typeAnnotation)) this.error("Type annotations require an arrow function", start);
+      if (params.length !== 1 || trailingComma) this.error("Expected one parenthesized expression", start);
+      return { type: "ParenthesizedExpression", expression: params[0], start, end: close.end };
+    }
+    if (token.kind === "[") {
+      const elements = this.list("]", true);
+      return { type: "ArrayExpression", elements: elements.items, start, end: elements.end };
+    }
+    if (token.kind === "{") return this.object(start);
+    if (token.kind === "`") return this.template(start);
+    this.error(`Expected an expression, found '${value ?? token.kind}'`, start);
+  }
+
+  list(close, spread = false, parameters = false) {
+    const items = [];
+    while (this.peek().kind !== close) {
+      items.push(spread && this.peek().kind === "..." ? this.spread() : parameters ? this.parameter() : this.expression());
+      if (!this.eat(",")) break;
+    }
+    return { items, end: this.expect(close).end };
+  }
+
+  genericArrow(start, async) {
+    this.scanner.pos = start;
+    this.current = null;
+    const typeParameters = readTypeParameters(this);
+    this.expect("(");
+    const parameters = this.parameters();
+    const returnType = this.arrowReturn();
+    if (!this.eat("=>")) this.error("Type parameters require an arrow function", start);
+    return { ...this.arrow(parameters.items, start, async, parameters.end, returnType), typeParameters };
+  }
+
+  arrow(params, start, async = false, parameterEnd, returnType = null) {
+    if (/[\r\n]/.test(this.scanner.src.slice(parameterEnd, this.scanner.pos))) this.error("Arrow parameters and => require the same line", start);
+    const names = new Set();
+    params = params.map(param => this.pattern(param, names));
+    let body;
+    if (this.peek().kind === "{") {
+      const parser = new StatementParser(this.scanner.src, this.scanner.filename);
+      parser.scanner.pos = this.peek().start;
+      body = parser.block(1, names);
+      if (body.end > this.end) this.error("Arrow body exceeds its expression", start);
+      this.scanner.pos = body.end;
+      this.current = null;
+    } else body = this.expression();
+    return { type: "ArrowFunctionExpression", ...(async ? { async: true } : {}), ...(returnType ? { returnType } : {}), params, body, start, end: body.end };
+  }
+
+  pattern(node, names) {
+    if (["AssignmentPattern", "RestElement", "ArrayPattern", "ObjectPattern"].includes(node.type)) {
+      for (const { id } of patternBindings(node)) this.pattern(id, names);
+      return node;
+    }
+    if (node.type === "Identifier") {
+      if (RESERVED_WORDS.has(node.name) || /^\$|^__/.test(node.name) || names.has(node.name)) this.error("Expected unique non-reserved binding names", node.start);
+      names.add(node.name);
+      return node;
+    }
+    if (node.type === "ArrayExpression") return { ...node, type: "ArrayPattern", elements: node.elements.map(item => this.pattern(item, names)) };
+    if (node.type === "ObjectExpression") return { ...node, type: "ObjectPattern", properties: node.properties.map(property => {
+      if (property.type !== "Property") this.error("Rest bindings are not supported", property.start);
+      return { ...property, value: this.pattern(property.value, names) };
+    }) };
+    this.error("Expected an identifier or object/array binding pattern", node.start);
+  }
+
+  // `[a, b] = pair` or the parenthesised `({ a } = point)` JavaScript requires at statement start.
+  destructuringAssignment() {
+    const first = this.peek();
+    if (!["[", "("].includes(first.kind)) return null;
+    const position = this.scanner.pos;
+    const current = this.current;
+    try {
+      const wrapped = first.kind === "(" ? !!this.take() : false;
+      const target = this.expression();
+      if (!["ArrayExpression", "ObjectExpression"].includes(target.type)) this.error("Expected a destructuring target", first.start);
+      this.expect("=");
+      const left = this.assignmentTarget(target);
+      const right = this.expression();
+      if (wrapped) this.expect(")");
+      return { type: "AssignmentStatement", left, operator: "=", right, start: first.start, end: this.scanner.pos };
+    } catch (error) {
+      if (error.name !== "NiralScriptError") throw error;
+      this.scanner.pos = position;
+      this.current = current;
+      return null;
+    }
+  }
+
+  assignmentTarget(node) {
+    if (node.type === "Identifier") {
+      if (RESERVED_WORDS.has(node.name)) this.error("Expected an assignable target", node.start);
+      return node;
+    }
+    if (node.type === "MemberExpression") {
+      for (let target = node; target && ["MemberExpression", "CallExpression"].includes(target.type); target = target.object ?? target.callee) {
+        if (target.optional) this.error("Optional chains cannot be assignment targets", node.start);
+      }
+      return node;
+    }
+    if (node.type === "ArrayExpression") {
+      return { ...node, type: "ArrayPattern", elements: node.elements.map((item, index) => {
+        if (item.type !== "SpreadElement") return this.assignmentTarget(item);
+        if (index !== node.elements.length - 1) this.error("A rest target must come last", item.start);
+        return { ...item, type: "RestElement", argument: this.assignmentTarget(item.argument) };
+      }) };
+    }
+    if (node.type === "ObjectExpression") {
+      return { ...node, type: "ObjectPattern", properties: node.properties.map(property => {
+        if (property.type !== "Property") this.error("Rest targets are not supported in object patterns", property.start);
+        if (property.computed) this.error("Computed keys are not supported in destructuring targets", property.start);
+        return { ...property, value: this.assignmentTarget(property.value) };
+      }) };
+    }
+    this.error("Expected an assignable destructuring target", node.start);
+  }
+
+  functionExpression(start, async) {
+    const parser = new StatementParser(this.scanner.src, this.scanner.filename);
+    parser.scanner.pos = this.scanner.pos;
+    const node = parser.functionExpression(start, async);
+    if (node.end > this.end) this.error("Function expression exceeds its enclosing expression", start);
+    this.scanner.pos = node.end;
+    this.current = null;
+    return node;
+  }
+
+  spread() {
+    const token = this.expect("...");
+    const argument = this.expression();
+    return { type: "SpreadElement", argument, start: token.start, end: argument.end };
+  }
+
+  object(start) {
+    const properties = [];
+    let hasPrototype = false;
+    while (this.peek().kind !== "}") {
+      if (this.peek().kind === "...") {
+        properties.push(this.spread());
+        if (!this.eat(",")) break;
+        continue;
+      }
+      const token = this.take();
+      if (!["identifier", "string", "number"].includes(token.kind)) this.error("Expected a plain object key", token.start);
+      const key = token.kind === "identifier"
+        ? { type: "Identifier", name: token.value, start: token.start, end: token.end }
+        : { type: "Literal", value: token.value, start: token.start, end: token.end };
+      const shorthand = !this.eat(":");
+      if (shorthand && (token.kind !== "identifier" || RESERVED_WORDS.has(token.value))) {
+        this.error("Expected ':' after object key", token.start);
+      }
+      if (!shorthand && token.value === "__proto__") {
+        if (hasPrototype) this.error("Duplicate __proto__ property", token.start);
+        hasPrototype = true;
+      }
+      const value = shorthand ? { ...key } : this.expression();
+      properties.push({ type: "Property", key, value, shorthand, start: key.start, end: value.end });
+      if (!this.eat(",")) break;
+    }
+    return { type: "ObjectExpression", properties, start, end: this.expect("}").end };
+  }
+
+  template(start) {
+    const quasis = [];
+    const expressions = [];
+    const scanner = this.scanner;
+    while (true) {
+      const chunkStart = scanner.pos;
+      const cooked = this.text("`");
+      const chunkEnd = scanner.pos;
+      const tail = scanner.eat("`");
+      quasis.push({ type: "TemplateElement", value: { raw: scanner.src.slice(chunkStart, chunkEnd), cooked }, tail, start: chunkStart, end: chunkEnd });
+      if (tail) break;
+      if (!scanner.eat("${")) this.error("Expected closing template delimiter", start);
+      expressions.push(this.expression());
+      this.expect("}");
+    }
+    return { type: "TemplateLiteral", quasis, expressions, start, end: scanner.pos };
+  }
+
+  text(quote) {
+    const scanner = this.scanner;
+    let value = "";
+    while (scanner.pos < this.end && scanner.peek() !== quote) {
+      if (quote === "`" && scanner.startsWith("${")) break;
+      const start = scanner.pos;
+      const char = scanner.peek();
+      scanner.pos++;
+      if (char !== "\\") {
+        if (quote !== "`" && /[\r\n]/.test(char)) this.error("Unescaped newline in string", start);
+        if (char === "\r") {
+          scanner.eat("\n");
+          value += "\n";
+        } else value += char;
+        continue;
+      }
+      if (scanner.pos >= this.end) this.error("Incomplete string escape", start);
+      const escape = scanner.peek();
+      scanner.pos++;
+      if (escape === "\n") continue;
+      if (escape === "\r") { scanner.eat("\n"); continue; }
+      if (escape === "x" || escape === "u") {
+        const braced = escape === "u" && scanner.eat("{");
+        const digits = braced ? scanner.read(/[0-9a-fA-F]+/y) : scanner.read(escape === "x" ? /[0-9a-fA-F]{2}/y : /[0-9a-fA-F]{4}/y);
+        if (!digits || (braced && !scanner.eat("}")) || Number.parseInt(digits, 16) > 0x10ffff) this.error("Invalid hexadecimal escape", start);
+        value += String.fromCodePoint(Number.parseInt(digits, 16));
+      } else {
+        if (/[1-9]/.test(escape) || (escape === "0" && /\d/.test(scanner.peek() ?? ""))) this.error("Legacy numeric escapes are not supported", start);
+        const escapes = { n: "\n", r: "\r", t: "\t", b: "\b", f: "\f", v: "\v", "0": "\0" };
+        value += escapes[escape] ?? escape;
+      }
+    }
+    return value;
+  }
+}
