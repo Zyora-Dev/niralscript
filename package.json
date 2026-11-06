@@ -9,11 +9,12 @@
     "./compile": "./compile.js"
   },
   "bin": { "nrs": "./cli.js" },
-  "files": ["*.js", "README.md", "NIRALSCRIPT.md"],
+  "files": ["*.js", "README.md", "NIRALSCRIPT.md", "LICENSE"],
   "engines": { "node": ">=22" },
   "keywords": ["niralscript", "compiler", "language", "zero-dependencies", "zyoralabs"],
   "homepage": "https://niral.site/niralscript",
   "repository": { "type": "git", "url": "git+https://github.com/Zyora-Dev/niralscript.git" },
-  "license": "MIT",
+  "author": "ZyoraLabs",
+  "license": "Apache-2.0",
   "dependencies": {}
 }
