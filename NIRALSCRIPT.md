@@ -250,10 +250,11 @@ const isBox: boolean = counter instanceof Box
   `accessor` keyword and `addInitializer`. A decorated class is typed as its
   undecorated form, so a replacing decorator is not type-checked, and the class
   cannot be referenced from its own static initializers.
-- Arbitrary computed names, complex base expressions, `new.target`, abstract
+- Arbitrary computed names, complex base expressions, abstract
   classes, `implements`, and TypeScript visibility/readonly/parameter-property
   modifiers are not supported. Use `#name` for native private members. This is
-  not full JS/TS class parity.
+  not full JS/TS class parity. `new.target` is available inside any function and
+  reads as the constructor under `new`, otherwise `undefined`.
 
 ### Implemented Statements and Scopes
 
@@ -272,11 +273,15 @@ const isBox: boolean = counter instanceof Box
   call/construction statements, and function-only `return` with an optional expression.
 - `for (const item of items) { ... }` and `let` variants accept the same patterns.
   Loop bindings are local to each iteration; the body must be braced.
-  Conventional `for (let index = 0; index < limit; index++) { ... }` and
-  `while (condition) { ... }` support `break` and `continue`, preserving finally
-  completion and per-iteration let closure capture. For headers allow omitted
-  parts, one initialized declaration or a simple statement; comma lists are not
-  supported. Labels, do-while and async iteration remain unsupported.
+  Conventional `for (let index = 0; index < limit; index++) { ... }`,
+  `while (condition) { ... }` and `do { ... } while (condition)` support `break`
+  and `continue`, preserving finally completion and per-iteration let closure
+  capture. The `do...while` body is braced and always runs at least once before the
+  test; a trailing semicolon after the `while (...)` clause is optional. For headers
+  allow omitted parts, one initialized declaration or a simple statement; comma
+  lists are not supported. A `label:` prefix may precede any loop, and `break label`
+  or `continue label` target that loop; labels are function-scoped, must be unique,
+  and may only prefix loops. Async iteration remains unsupported.
 - `for (const key in record) { ... }` walks own enumerable keys. The binding must
   be a plain identifier and is always typed `string`, so destructured ids and
   explicit annotations are rejected with NRS072. `break`/`continue` behave as in
@@ -598,10 +603,21 @@ export const initial = 0
 export function twice(value) { return value * 2 }
 ```
 
-Library top levels permit imports, constants, functions and type aliases. Local names stay
+A module may also re-export members of another module, optionally renaming them:
+
+```text
+export { twice, initial as start } from "./math.nrs"
+```
+
+Re-exports participate in the dependency graph like imports and chain through
+intermediate modules (`a.nrs` re-exports from `b.nrs` which re-exports from
+`c.nrs`). Re-exporting a name the target module does not export, or omitting the
+`from` clause, is rejected with NRS078/NIRAL078.
+
+Library top levels permit imports, re-exports, constants, functions and type aliases. Local names stay
 private unless the declaration is exported; aliases do not expose other module
 bindings. Imports are readonly bindings (constant objects are not deeply frozen).
-Default/namespace imports, bare side-effect imports, re-exports, cyclic graphs and
+Default/namespace imports, bare side-effect imports, cyclic graphs and
 exported mutable/reactive declarations are rejected with NRS078/NIRAL078.
 
 Dependencies initialize before their importer and are deduplicated within that
@@ -711,8 +727,10 @@ Checking remains gradual by default. Use `{ strictTypes: true }` in the checking
 standalone compile or component adapter API, `--strict` with standalone CLI
 check/compile, or the reload-required `niral.niralscriptStrictTypes` editor setting
 to require narrowing unknown and nullable values before typed use/property access.
-This is not runtime validation or a sound replacement for TypeScript. Unannotated
-host globals, server results and complex methods remain unknown; input annotations
+This is not runtime validation or a sound replacement for TypeScript. Approved host
+globals are treated as opaque-but-known, so property access, calls and `new` on
+them are permitted (and keep flowing as opaque) even under strict typing; unannotated
+server results and complex methods remain unknown; input annotations
 do not validate supplied values. Function variance,
 generic inference and general collection-method checks remain bounded.
 Dynamic method selection and

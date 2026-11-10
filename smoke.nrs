@@ -1,0 +1,3 @@
+let n = $state(0)
+export function inc(){ n = n + 1 }
+export function count(){ return n }

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 ZyoraLabs. Runtime Library Exception applies — see LICENSE.
 import { NiralScriptError, sourceLocation } from "./errors.js";
 import { emitContractValidator } from "./contracts.js";
 
@@ -125,6 +127,7 @@ export function typeAnnotations(node, result = []) {
 }
 
 const UNKNOWN = { kind: "unknown" };
+const ANY = { kind: "any" };
 const UNDEFINED = { kind: "undefined" };
 // recursive aliases make type values cyclic, so identity keys stand in for a repeat visit
 function identify(value, seen = new Map()) {
@@ -159,6 +162,7 @@ function accepts(expected, actual, strict = false, base = () => null, pending = 
 }
 
 function compare(expected, actual, strict, base, pending) {
+  if (expected.kind === "any" || actual.kind === "any") return true;
   if (expected.kind === "unknown" || actual.kind === "never") return true;
   if (actual.kind === "unknown") return !strict;
   if (actual.kind === "union") return actual.members.every(value => accepts(expected, value, strict, base, pending));
@@ -360,6 +364,7 @@ export function checkTypes(program, analysis, { strictTypes = false } = {}) {
     if (!accepts(expected, actual, strictTypes, baseType)) fail(`Expected ${describe(expected)}, received ${describe(actual)}`, node);
   };
   function property(value, key, seen = new Set()) {
+    if (value.kind === "any") return ANY;
     if (value.kind === "literal") value = { kind: typeof value.value };
     if (value.kind === "union") return merge(value.members.map(member => property(member, key, seen)));
     if (["instance", "constructor"].includes(value.kind)) {
@@ -546,6 +551,7 @@ export function checkTypes(program, analysis, { strictTypes = false } = {}) {
       const binding = analysis.resolved.get(node) ?? declared.get(node);
       if (flows.get(node)?.has(binding)) return flows.get(node).get(binding);
       if (annotated.has(binding)) return annotated.get(binding);
+      if (binding?.kind === "global") return ANY;
       const declaration = analysis.declarations.get(binding);
       if (["FunctionDeclaration", "FunctionExpression"].includes(declaration?.type)) return { kind: "function", node: declaration };
       if (declaration?.type === "ClassDeclaration" || declaration?.type === "ClassExpression") return classType(declaration, "constructor");
@@ -555,6 +561,7 @@ export function checkTypes(program, analysis, { strictTypes = false } = {}) {
       return value;
     }
     if (node.type === "ParenthesizedExpression") return infer(node.expression, seen);
+    if (node.type === "MetaProperty") return UNKNOWN;
     if (node.type === "ContractExpression") return typeOf(node.typeAnnotation);
     if (node.type === "CastExpression") {
       return node.operator === "as" ? typeOf(node.castType) : infer(node.expression, seen);
@@ -567,6 +574,7 @@ export function checkTypes(program, analysis, { strictTypes = false } = {}) {
     }
     if (node.type === "NewExpression") {
       const callee = infer(node.callee, seen);
+      if (callee.kind === "any") return ANY;
       return callee.kind === "constructor" ? constructorSignature(callee, node, seen).result : UNKNOWN;
     }
     if (node.type === "SpreadElement") return infer(node.argument, seen).element ?? UNKNOWN;
@@ -609,6 +617,7 @@ export function checkTypes(program, analysis, { strictTypes = false } = {}) {
     }
     if (node.type === "CallExpression") {
       const callee = infer(node.callee, seen);
+      if (callee.kind === "any") return ANY;
       if (callee.kind === "function") return callSignature(callee.node, node, seen).result;
       if (callee.kind === "signature") return callee.result;
       if (node.callee.type === "MemberExpression") {
@@ -732,7 +741,7 @@ export function checkTypes(program, analysis, { strictTypes = false } = {}) {
       flow(node.right, narrowed(node.left, environment, node.operator === "&&"));
       return environment;
     }
-    if (["ForStatement", "WhileStatement", "ForOfStatement", "ForInStatement"].includes(node.type)) {
+    if (["ForStatement", "WhileStatement", "DoWhileStatement", "ForOfStatement", "ForInStatement"].includes(node.type)) {
       flow(node.init, new Map());
       flow(node.test ?? node.right, new Map());
       flow(node.body, node.test ? narrowed(node.test, new Map(), true) : new Map());
@@ -741,7 +750,7 @@ export function checkTypes(program, analysis, { strictTypes = false } = {}) {
     }
     let current = new Map(environment);
     for (const [key, child] of Object.entries(node)) {
-      if (["key", "source", "sources", "id", "typeAnnotation", "returnType"].includes(key)) continue;
+      if (["key", "source", "sources", "id", "label", "typeAnnotation", "returnType"].includes(key)) continue;
       if (Array.isArray(child)) for (const item of child) current = flow(item, current);
       else if (child?.type) current = flow(child, current);
     }
@@ -866,11 +875,11 @@ export function checkTypes(program, analysis, { strictTypes = false } = {}) {
     let callee = infer(node.callee);
     if (node.type === "NewExpression") {
       if (callee.kind === "constructor") callee = constructorSignature(callee, node);
-      else if (callee.kind !== "unknown") fail("new requires a class constructor", node.callee);
+      else if (!["unknown", "any"].includes(callee.kind)) fail("new requires a class constructor", node.callee);
     } else if (node.callee.type === "Super") {
       callee = constructorSignature(callee, node);
     } else if (callee.kind === "constructor") fail("Class constructors must be invoked with new", node.callee);
-    if (node.callee.type === "MemberExpression" && ["instance", "constructor"].includes(infer(node.callee.object).kind) && !["function", "signature", "unknown"].includes(callee.kind)) fail("Class member is not callable", node.callee);
+    if (node.callee.type === "MemberExpression" && ["instance", "constructor"].includes(infer(node.callee.object).kind) && !["function", "signature", "unknown", "any"].includes(callee.kind)) fail("Class member is not callable", node.callee);
     if (!["function", "signature"].includes(callee.kind)) continue;
     const contract = callee.kind === "function" ? callSignature(callee.node, node) : callee;
     const argumentsList = flattenArguments(node.arguments);

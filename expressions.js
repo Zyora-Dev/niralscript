@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 ZyoraLabs. Runtime Library Exception applies — see LICENSE.
 import { Scanner, RESERVED_WORDS } from "./scanner.js";
 import { StatementParser } from "./parser.js";
 import { readType, readTypeParameters } from "./types.js";
@@ -332,6 +334,12 @@ export class ExpressionParser {
       }
       if (value === "this" || value === "super") return { type: value === "this" ? "ThisExpression" : "Super", start, end };
       if (value === "new") {
+        if (this.peek().kind === ".") {
+          this.take();
+          const property = this.expect("identifier");
+          if (property.value !== "target") this.error("Only new.target is a valid meta-property", property.start);
+          return { type: "MetaProperty", meta: "new", property: "target", start, end: property.end };
+        }
         const constructed = this.postfix(this.primary(), true);
         if (constructed.type !== "NewExpression" || constructed.optional) this.error("Invalid constructor expression", start);
         return { ...constructed, start };

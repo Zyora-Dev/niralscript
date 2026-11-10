@@ -118,9 +118,9 @@ The second example requires an existing `dist` directory and a host-provided
 | Area | Implemented capabilities |
 | --- | --- |
 | Reactive declarations | Top-level `input`, `state`, `derive`; readonly inputs and derived bindings; immediate state reads. |
-| Functions and control flow | Named/anonymous functions, arrows, defaults/rest, spread, destructuring, conditionals, for/of/in, while, break and continue. |
+| Functions and control flow | Named/anonymous functions, arrows, defaults/rest, spread, destructuring, conditionals, for/of/in, while, do...while, labeled loops with break/continue. |
 | Async and errors | Async functions/arrows, await, throw, try/catch/finally; top-level await in standalone modules. |
-| Gradual types | Primitives, literals, unions, records, arrays, aliases, interfaces, casts, signatures, generics, constraints/defaults, recursive types and opt-in strict narrowing. |
+| Structural type checking | A structural-subtyping checker over primitives, literals, unions, records, arrays, promises, aliases, interfaces, casts and signatures, with generics whose constraints are enforced (not just parsed) plus defaults and recursive types. Control-flow narrowing covers `typeof`, `===`/`!==` against literal/`null`/`undefined`, truthiness, `!`, `&&`/`||` and member access. Static checking stays gradual by default and strict under `--strict`. |
 | Classes | Typed constructors, generic inheritance, private members, accessors, static blocks, class expressions and a documented decorator subset. |
 | Modules | Named exports, explicit relative `.nrs` imports, type-only imports, isolated module scopes and original-source diagnostics. |
 | Runtime contracts | Explicit `contract<Type>(value)` expressions emit validators for supported finite-data types. |
@@ -206,8 +206,8 @@ standalone npm compiler does not include its own language server.
 
 This repository is the standalone source of record. The Niral workspace keeps a
 vendored copy; compiler changes must be synchronized deliberately.
-The framework-hosted suite currently contains 81 language tests plus 258
-framework tests, verified on 6 November 2026. A real npm tarball installation
+The framework-hosted suite currently contains 87 language tests plus 259
+framework tests, verified on 10 November 2026. A real npm tarball installation
 also passed API, CLI, generated runtime, isolation, input-update, source-map and
 error-path checks. These are verification results, not a stability guarantee.
 
