@@ -232,12 +232,15 @@ function safe(term: tainted<string>): string {
   literals, pure constants and laundered results are trusted, so there is no silent
   bypass through an unmodeled expression shape.
 - The taint is cleared only by an explicit launder: `contract<T>(value)` (which
-  also validates the shape), `sanitize(value)` or `trust(value)`. The escape hatch
-  is a named call, so a reviewer can find every bypass with one grep for `trust(`.
-- The enforced sink in this release is `sql.query(...)`, recognized as the ambient
-  `sql`. A local binding that shadows the name `sql` is not treated as the sink, so
-  honest code is never falsely flagged. HTML, shell and `eval` sinks follow the same
-  mechanism and are planned next.
+  also validates the shape), `sanitize(value)`, `trust(value)`, or `escape(value)`
+  (HTML-escaping, for the XSS sinks). The escape hatch is a named call, so a
+  reviewer can find every bypass with one grep for `trust(`.
+- The enforced sinks in this release are the SQL sink `sql.query(...)` (recognized
+  as the ambient `sql`) and the raw-HTML emitters `html(...)`, `raw(...)`,
+  `unsafeHTML(...)` and `renderHTML(...)` — the functions that write unescaped HTML
+  and are therefore the cross-site-scripting (XSS) injection points. A local binding
+  that shadows one of these names is not treated as the sink, so honest code is never
+  falsely flagged. Shell and `eval` sinks follow the same mechanism and are next.
 - `NRS090` reports at the exact argument that carried the taint. Laundering with a
   contract gives you validation and de-tainting in one boundary; `sanitize`/`trust`
   are for cases where you have already proven the value safe by other means.

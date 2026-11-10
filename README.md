@@ -144,11 +144,15 @@ function, promise and unknown schemas cannot become runtime contracts.
 ## Taint tracking
 
 `tainted<T>` marks untrusted input. It behaves as `T` everywhere, but the compiler
-raises **NRS090** if it reaches a dangerous sink (`sql.query` in this release)
-without being laundered through `contract<T>()`, `sanitize()` or `trust()`. Taint
-propagates through assignment, aliasing, member access, `+` concatenation and
-template literals, so injection prevention is checked at compile time rather than
-left to convention.
+raises **NRS090** if it reaches a dangerous sink without being laundered. The
+enforced sinks are the SQL sink `sql.query(...)` and the raw-HTML (XSS) emitters
+`html(...)`, `raw(...)`, `unsafeHTML(...)` and `renderHTML(...)`. Launder with
+`contract<T>()`, `sanitize()`, `trust()`, or `escape()` (HTML-escaping, for the
+HTML sinks). Propagation is conservative (taint-on-contact): taint flows through
+assignment, reassignment, aliasing, member access, array/object construction and
+spread, `+` and coercion, template literals, and the arguments of any
+non-laundering call — so injection prevention is checked at compile time rather
+than left to convention, with no silent bypass through an unmodeled shape.
 
 ```text
 function search(term: tainted<string>): string {

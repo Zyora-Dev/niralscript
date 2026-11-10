@@ -931,10 +931,13 @@ export function checkTypes(program, analysis, { strictTypes = false, taintSource
   checkTaint(program, analysis, { annotated, calls, taintSources: new Set(taintSources) });
 }
 
-// A call that strips taint: contract<T>(x) validates, sanitize/trust explicitly launder.
-const LAUNDER_CALLS = new Set(["sanitize", "trust"]);
-// Dangerous sinks keyed by receiver.method; value is the 0-based index of the injectable argument.
+// A call that strips taint: contract<T>(x) validates; sanitize/trust/escape explicitly launder.
+// escape() is the HTML-escaping launder for the XSS sinks; sanitize/trust are generic.
+const LAUNDER_CALLS = new Set(["sanitize", "trust", "escape"]);
+// Dangerous member-call sinks keyed by receiver.method; value is the injectable argument index.
 const TAINT_SINKS = new Map([["sql.query", 0]]);
+// Dangerous bare-identifier call sinks (raw HTML emitters that bypass escaping → XSS).
+const HTML_SINKS = new Map([["html", 0], ["raw", 0], ["unsafeHTML", 0], ["renderHTML", 0]]);
 
 // Compile-enforced taint tracking: untrusted data may not reach a dangerous sink unless
 // laundered through contract<T>(), sanitize() or trust(). A value is untrusted when it is
@@ -1015,18 +1018,30 @@ function checkTaint(program, analysis, { annotated, calls, taintSources = new Se
   }
   seedAssignments();
 
+  // The sink callee must resolve to the ambient helper, never a user binding that shadows the name.
+  const isAmbient = reference => {
+    const binding = resolved.get(reference);
+    return !binding || binding.kind === "global";
+  };
+
   for (const node of calls) {
-    if (node.type !== "CallExpression" || node.callee.type !== "MemberExpression" || node.callee.computed) continue;
-    const object = node.callee.object;
-    // The sink must be the ambient `sql`, not a user binding that shadows the name.
-    const receiver = resolved.get(object);
-    if (object.type !== "Identifier" || (receiver && receiver.kind !== "global")) continue;
-    const key = `${object.name}.${node.callee.property.name}`;
-    const index = TAINT_SINKS.get(key);
+    if (node.type !== "CallExpression") continue;
+    const callee = node.callee;
+    let key, index;
+    if (callee.type === "MemberExpression" && !callee.computed && callee.object.type === "Identifier" && isAmbient(callee.object)) {
+      // Member-call sink, e.g. sql.query(...).
+      key = `${callee.object.name}.${callee.property.name}`;
+      index = TAINT_SINKS.get(key);
+    } else if (callee.type === "Identifier" && isAmbient(callee)) {
+      // Bare-identifier sink, e.g. html(...) — a raw HTML emitter that bypasses escaping.
+      key = callee.name;
+      index = HTML_SINKS.get(key);
+    }
     if (index === undefined) continue;
     const argument = node.arguments[index];
     if (argument && tainted(argument)) {
-      taintFail(`Untrusted (tainted) value reaches ${key}; launder it with contract<T>(), sanitize() or trust() first`, argument);
+      const hint = HTML_SINKS.has(key) ? "escape() or sanitize()" : "contract<T>(), sanitize() or trust()";
+      taintFail(`Untrusted (tainted) value reaches ${key}; launder it with ${hint} first`, argument);
     }
   }
 }
