@@ -199,6 +199,45 @@ Contracts do not guarantee integer ranges, nonempty strings or business rules;
 check those separately after the structural guard. Existing static-checking
 limitations for dynamic methods and escaping aliases still apply.
 
+### Compile-Enforced Taint Tracking
+
+Injection — untrusted input reaching a query, template or shell unchecked — is the
+most common cause of real-world data breaches. NiralScript tracks it in the type
+system: `tainted<T>` marks a value as untrusted. A tainted value behaves exactly
+like `T` for arithmetic, concatenation and assignment, but the compiler refuses to
+let it reach a dangerous sink until it is laundered. This is a hard compile error
+(`NRS090`, `NIRAL090` in components), not a lint warning.
+
+```niralscript
+function search(term: tainted<string>): string {
+  return sql.query(term)                       // NRS090 — untrusted value reaches a sink
+}
+
+function safe(term: tainted<string>): string {
+  return sql.query(contract<string>(term))     // laundered — compiles
+}
+```
+
+- A value is tainted when it is annotated `tainted<T>`, and the taint propagates
+  through assignment, aliasing, member access, string `+` concatenation, template
+  literals and conditional/logical expressions. A tainted sub-expression taints
+  the whole expression.
+- The taint is cleared only by an explicit launder: `contract<T>(value)` (which
+  also validates the shape), `sanitize(value)` or `trust(value)`. The escape hatch
+  is a named call, so a reviewer can find every bypass with one grep for `trust(`.
+- The enforced sink in this release is `sql.query(...)`, recognized as the ambient
+  `sql`. A local binding that shadows the name `sql` is not treated as the sink, so
+  honest code is never falsely flagged. HTML, shell and `eval` sinks follow the same
+  mechanism and are planned next.
+- `NRS090` reports at the exact argument that carried the taint. Laundering with a
+  contract gives you validation and de-tainting in one boundary; `sanitize`/`trust`
+  are for cases where you have already proven the value safe by other means.
+
+This makes injection prevention a property the compiler checks, not a convention a
+developer must remember. It is a real language-level control for the injection
+class specifically; it is not memory safety or formal verification, and a laundered
+value is only as safe as the sanitizer you supplied.
+
 ### Classes and Constructors
 
 Named classes emit native JavaScript classes in standalone ESM and both Niral

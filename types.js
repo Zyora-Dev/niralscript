@@ -91,6 +91,8 @@ export function readType(parser) {
     } else if (token.kind === "identifier" && ["number", "bigint", "string", "boolean", "null", "undefined", "void", "unknown"].includes(token.value)) value = { kind: token.value };
     else if (token.kind === "identifier" && token.value === "Promise") {
       parser.expect("<"); const result = union(); parser.expectClose(); value = { kind: "promise", result };
+    } else if (token.kind === "identifier" && token.value === "tainted") {
+      parser.expect("<"); const inner = union(); parser.expectClose(); value = { ...inner, tainted: true };
     } else if (["number", "string"].includes(token.kind) || token.kind === "identifier" && ["true", "false"].includes(token.value)) value = { kind: "literal", value: token.kind === "identifier" ? token.value === "true" : token.value };
     else if (token.kind === "-") value = { kind: "literal", value: -parser.expect("number").value };
     else if (token.kind === "identifier") {
@@ -924,5 +926,68 @@ export function checkTypes(program, analysis, { strictTypes = false } = {}) {
     const values = fn.body.type === "BlockStatement" ? returns(fn.body).map(node => node.argument) : [fn.body];
     for (const value of values) check(expected, fn.async ? unwrap(infer(value)) : infer(value), value ?? fn.returnType ?? fn);
     if (fn.body.type === "BlockStatement" && !terminates(fn.body)) check(expected, UNDEFINED, fn.returnType ?? fn);
+  }
+
+  checkTaint(program, analysis, { annotated, infer, typeOf, calls });
+}
+
+// A call that strips taint: contract<T>(x) validates, sanitize/trust explicitly launder.
+const LAUNDER_CALLS = new Set(["sanitize", "trust"]);
+// Dangerous sinks keyed by receiver.method; value is the 0-based index of the injectable argument.
+const TAINT_SINKS = new Map([["sql.query", 0]]);
+
+// Compile-enforced taint tracking: untrusted (tainted<T>) data may not reach a dangerous
+// sink unless laundered through contract<T>(), sanitize() or trust(). Raises NRS090.
+function checkTaint(program, analysis, { annotated, infer, typeOf, calls }) {
+  const taintFail = (message, node) => { throw new NiralScriptError("NRS090", message, sourceLocation(program, node)); };
+  const resolved = analysis.resolved;
+
+  function launders(node) {
+    if (node.type === "ContractExpression") return true;
+    if (node.type !== "CallExpression") return false;
+    const callee = node.callee;
+    return callee.type === "Identifier" && LAUNDER_CALLS.has(callee.name) && !resolved.get(callee);
+  }
+
+  // A value is tainted when it originates from a tainted<T> binding and has not been laundered.
+  function tainted(node, seen = new Set()) {
+    if (!node || seen.has(node)) return false;
+    seen = new Set(seen).add(node);
+    switch (node.type) {
+      case "ParenthesizedExpression": return tainted(node.expression, seen);
+      case "TemplateLiteral": return node.expressions.some(part => tainted(part, seen));
+      case "BinaryExpression": return node.operator === "+" && (tainted(node.left, seen) || tainted(node.right, seen));
+      case "LogicalExpression":
+      case "ConditionalExpression": return ["left", "right", "consequent", "alternate"].some(key => node[key] && tainted(node[key], seen));
+      case "MemberExpression": return tainted(node.object, seen);
+      case "CallExpression": {
+        if (launders(node)) return false;
+        // A method on a tainted receiver (e.g. tainted string .trim()) stays tainted.
+        return node.callee.type === "MemberExpression" && tainted(node.callee.object, seen);
+      }
+      case "Identifier": {
+        const binding = resolved.get(node);
+        if (!binding) return false;
+        if (annotated.get(binding)?.tainted) return true;
+        const declaration = analysis.declarations.get(binding);
+        return declaration?.init ? tainted(declaration.init, seen) : false;
+      }
+      default: return false;
+    }
+  }
+
+  for (const node of calls) {
+    if (node.type !== "CallExpression" || node.callee.type !== "MemberExpression" || node.callee.computed) continue;
+    const object = node.callee.object;
+    // The sink must be the ambient `sql`, not a user binding that shadows the name.
+    const receiver = resolved.get(object);
+    if (object.type !== "Identifier" || (receiver && receiver.kind !== "global")) continue;
+    const key = `${object.name}.${node.callee.property.name}`;
+    const index = TAINT_SINKS.get(key);
+    if (index === undefined) continue;
+    const argument = node.arguments[index];
+    if (argument && tainted(argument)) {
+      taintFail(`Untrusted (tainted) value reaches ${key}; launder it with contract<T>(), sanitize() or trust() first`, argument);
+    }
   }
 }

@@ -141,6 +141,21 @@ An explicit contract copies valid data and throws **NRS081** with a field path o
 invalid data. It does not coerce values or add business rules. Recursive, class,
 function, promise and unknown schemas cannot become runtime contracts.
 
+## Taint tracking
+
+`tainted<T>` marks untrusted input. It behaves as `T` everywhere, but the compiler
+raises **NRS090** if it reaches a dangerous sink (`sql.query` in this release)
+without being laundered through `contract<T>()`, `sanitize()` or `trust()`. Taint
+propagates through assignment, aliasing, member access, `+` concatenation and
+template literals, so injection prevention is checked at compile time rather than
+left to convention.
+
+```text
+function search(term: tainted<string>): string {
+  return sql.query(contract<string>(term))   // laundered — compiles
+}
+```
+
 ## Compiler APIs
 
 ```js
