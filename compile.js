@@ -167,7 +167,7 @@ export function compileNiralScript(source, filename = "entry.nrs", options = {})
         write(identifier(binding) + (references.has(node) && reactive(binding) ? ".get()" : ""), node);
         break;
       }
-      case "Literal": write(typeof node.value === "number" ? `(${String(node.value)})` : JSON.stringify(node.value), node); break;
+      case "Literal": write(typeof node.value === "number" ? `(${String(node.value)})` : typeof node.value === "bigint" ? `(${String(node.value)}n)` : JSON.stringify(node.value), node); break;
       case "Program": joined(node.body, "\n"); break;
       case "ImportDeclaration":
       case "TypeAliasDeclaration":

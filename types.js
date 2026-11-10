@@ -42,7 +42,7 @@ export function readTypeParameters(parser) {
     }
     params.push({ name: name.value, ...(constraint ? { constraint } : {}), ...(defaultType ? { default: defaultType } : {}) });
   } while (parser.eat(","));
-  const close = parser.expect(">");
+  const close = parser.expectClose();
   return { type: "TypeAnnotation", value: { kind: "parameters", names, params }, start: opening.start, end: close.end };
 }
 
@@ -88,14 +88,14 @@ export function readType(parser) {
       }
       parser.expect("}");
       value = { kind: "object", properties };
-    } else if (token.kind === "identifier" && ["number", "string", "boolean", "null", "undefined", "void", "unknown"].includes(token.value)) value = { kind: token.value };
+    } else if (token.kind === "identifier" && ["number", "bigint", "string", "boolean", "null", "undefined", "void", "unknown"].includes(token.value)) value = { kind: token.value };
     else if (token.kind === "identifier" && token.value === "Promise") {
-      parser.expect("<"); const result = union(); parser.expect(">"); value = { kind: "promise", result };
+      parser.expect("<"); const result = union(); parser.expectClose(); value = { kind: "promise", result };
     } else if (["number", "string"].includes(token.kind) || token.kind === "identifier" && ["true", "false"].includes(token.value)) value = { kind: "literal", value: token.kind === "identifier" ? token.value === "true" : token.value };
     else if (token.kind === "-") value = { kind: "literal", value: -parser.expect("number").value };
     else if (token.kind === "identifier") {
       const args = [];
-      if (parser.eat("<")) { do { args.push(union()); } while (parser.eat(",")); parser.expect(">"); }
+      if (parser.eat("<")) { do { args.push(union()); } while (parser.eat(",")); parser.expectClose(); }
       value = { kind: "reference", name: token.value, args, start: token.start, end: token.end };
     }
     else parser.error("Expected a type", token.start);
@@ -581,16 +581,29 @@ export function checkTypes(program, analysis, { strictTypes = false } = {}) {
     if (node.type === "ArrowFunctionExpression" || node.type === "FunctionExpression") return { kind: "function", node };
     if (node.type === "AwaitExpression") return unwrap(infer(node.argument, seen));
     if (node.type === "TemplateLiteral") return { kind: "string" };
-    if (node.type === "UnaryExpression") return { kind: node.operator === "typeof" ? "string" : node.operator === "!" ? "boolean" : "number" };
+    if (node.type === "UnaryExpression") {
+      if (node.operator === "typeof") return { kind: "string" };
+      if (node.operator === "!") return { kind: "boolean" };
+      if (node.operator === "~" || node.operator === "-" || node.operator === "+") {
+        const operand = infer(node.argument, seen);
+        const scalar = operand.kind === "literal" ? { kind: typeof operand.value } : operand;
+        return node.operator !== "+" && scalar.kind === "bigint" ? { kind: "bigint" } : { kind: "number" };
+      }
+      return { kind: "number" };
+    }
     if (node.type === "BinaryExpression") {
       if (["===", "!==", "<", "<=", ">", ">=", "instanceof"].includes(node.operator)) return { kind: "boolean" };
-      if (node.operator !== "+") return { kind: "number" };
       const leftValue = infer(node.left, seen);
       const rightValue = infer(node.right, seen);
       const left = leftValue.kind === "literal" ? { kind: typeof leftValue.value } : leftValue;
       const right = rightValue.kind === "literal" ? { kind: typeof rightValue.value } : rightValue;
-      if (left.kind === "string" || right.kind === "string") return { kind: "string" };
-      return left.kind === "number" && right.kind === "number" ? { kind: "number" } : UNKNOWN;
+      if (node.operator === "+") {
+        if (left.kind === "string" || right.kind === "string") return { kind: "string" };
+        if (left.kind === "bigint" && right.kind === "bigint") return { kind: "bigint" };
+        return left.kind === "number" && right.kind === "number" ? { kind: "number" } : UNKNOWN;
+      }
+      if (left.kind === "bigint" && right.kind === "bigint") return { kind: "bigint" };
+      return { kind: "number" };
     }
     if (node.type === "LogicalExpression") {
       let left = infer(node.left, seen);
@@ -831,8 +844,8 @@ export function checkTypes(program, analysis, { strictTypes = false } = {}) {
     const expected = assignmentType(node.left);
     let actual = infer(node.right);
     if (node.update) actual = { kind: "number" };
-    else if (node.operator === "+=") actual = expected.kind === "string" || actual.kind === "string" || actual.kind === "literal" && typeof actual.value === "string" ? { kind: "string" } : { kind: "number" };
-    else if (node.operator !== "=") actual = { kind: "number" };
+    else if (node.operator === "+=") actual = expected.kind === "string" || actual.kind === "string" || actual.kind === "literal" && typeof actual.value === "string" ? { kind: "string" } : expected.kind === "bigint" ? { kind: "bigint" } : { kind: "number" };
+    else if (node.operator !== "=") actual = expected.kind === "bigint" ? { kind: "bigint" } : { kind: "number" };
     if (node.left.type === "MemberExpression") {
       const receiver = infer(node.left.object);
       if (["instance", "constructor"].includes(receiver.kind)) {

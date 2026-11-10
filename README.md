@@ -118,6 +118,7 @@ The second example requires an existing `dist` directory and a host-provided
 | Area | Implemented capabilities |
 | --- | --- |
 | Reactive declarations | Top-level `input`, `state`, `derive`; readonly inputs and derived bindings; immediate state reads. |
+| Operators and literals | Arithmetic (`+ - * / %`), exponent `**` (right-associative), bitwise/shift (`& \| ^ ~ << >> >>>`), logical (`&& \|\| ??`), strict equality/relational, and their compound assignments (`**= &= \|= ^= <<= >>= >>>=`). Numeric literals include decimals, hexadecimal (`0xFF`), binary (`0b1010`), octal (`0o17`), digit separators (`1_000_000`) and `bigint` literals (`123n`). Loose equality (`== !=`), regex literals and legacy leading-zero numbers remain unsupported. |
 | Functions and control flow | Named/anonymous functions, arrows, defaults/rest, spread, destructuring, conditionals, for/of/in, while, do...while, labeled loops with break/continue. |
 | Async and errors | Async functions/arrows, await, throw, try/catch/finally; top-level await in standalone modules. |
 | Structural type checking | A structural-subtyping checker over primitives, literals, unions, records, arrays, promises, aliases, interfaces, casts and signatures, with generics whose constraints are enforced (not just parsed) plus defaults and recursive types. Control-flow narrowing covers `typeof`, `===`/`!==` against literal/`null`/`undefined`, truthiness, `!`, `&&`/`||` and member access. Static checking stays gradual by default and strict under `--strict`. |

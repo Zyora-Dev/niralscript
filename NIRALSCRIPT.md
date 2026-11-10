@@ -109,10 +109,12 @@ can still destabilize a browser. Chromium is the currently verified browser.
 
 ### Implemented Expression Subset
 
-- Decimal numbers (including fractions and exponents), single/double-quoted
-  strings, booleans and null. Parsing is syntax-only; identifier references are
-  resolved by the separate analyzer. Strings support ordinary JavaScript escapes,
-  hexadecimal and Unicode escapes; legacy numeric escapes are rejected.
+- Numbers: decimals (including fractions and exponents), hexadecimal (`0xFF`),
+  binary (`0b1010`), octal (`0o17`), digit separators (`1_000_000`) and `bigint`
+  literals (`123n`). Single/double-quoted strings, booleans and null. Parsing is
+  syntax-only; identifier references are resolved by the separate analyzer.
+  Strings support ordinary JavaScript escapes, hexadecimal and Unicode escapes;
+  legacy numeric escapes are rejected.
 - Arrays without holes; plain objects with identifier/string/number keys,
   explicit values or identifier shorthand. Array/object spreads and trailing
   commas are accepted, as is call-argument spread.
@@ -124,14 +126,16 @@ can still destabilize a browser. Chromium is the currently verified browser.
 - Optional member/index/call access uses `?.name`, `?.[key]` and `?.(args)`.
   Native short-circuiting skips keys/arguments and preserves method receivers;
   parentheses end a continuous chain. Optional chains cannot be assignment targets.
-- Precedence, tightest first: member/index/call, unary `! + - await typeof`, `* / %`, `+ -`,
-  `< <= > >= instanceof`, `=== !==`, `&&`, `||`/`??`, then conditional `?:`. Binary operators
-  associate left; unary operators and conditional alternatives associate right.
-  Mixing `??` with `&&`/`||` requires parentheses. `typeof` does not bypass name
-  resolution: undeclared names remain errors.
+- Precedence, tightest first: member/index/call, unary `! ~ + - await typeof`,
+  exponent `**`, `* / %`, `+ -`, shifts `<< >> >>>`, `< <= > >= instanceof`,
+  `=== !==`, bitwise `&`, `^`, `|`, `&&`, `||`/`??`, then conditional `?:`.
+  Binary operators associate left except `**`, which associates right alongside
+  unary operators and conditional alternatives. A `>>`/`>>>` token is split when
+  it closes a generic type-argument list. Mixing `??` with `&&`/`||` requires
+  parentheses. `typeof` does not bypass name resolution: undeclared names remain
+  errors.
 - Unsupported syntax fails with source-spanned NRS071 (mapped to NIRAL071 in
-  components). Assignment/update expressions, bitwise/exponent operators,
-  loose equality, regex literals, nondecimal and legacy leading-zero
+  components). Loose equality (`== !=`), regex literals and legacy leading-zero
   numbers are not accepted.
 
 ### Compiler-Generated Runtime Contracts

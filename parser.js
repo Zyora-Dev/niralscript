@@ -157,7 +157,7 @@ export class StatementParser {
         const opening = parser.take();
         const values = [];
         do { values.push(readType(parser).value); } while (parser.eat(","));
-        const close = parser.expect(">");
+        const close = parser.expectClose();
         superTypeArguments = { type: "TypeAnnotation", value: { kind: "arguments", values }, start: opening.start, end: close.end };
       }
     }
@@ -628,7 +628,7 @@ export class StatementParser {
     const expression = parser.expression();
     const operator = prefix ?? parser.peek();
     let statement;
-    if (["=", "+=", "-=", "*=", "/=", "%=", "++", "--"].includes(operator.kind)) {
+    if (["=", "+=", "-=", "*=", "/=", "%=", "**=", "<<=", ">>=", ">>>=", "&=", "|=", "^=", "++", "--"].includes(operator.kind)) {
       if (!prefix) parser.take();
       if (!["Identifier", "MemberExpression"].includes(expression.type)) scanner.error("NRS072", "Invalid assignment target", { start });
       for (let target = expression; target && ["MemberExpression", "CallExpression"].includes(target.type); target = target.object ?? target.callee) if (target.optional) scanner.error("NRS072", "Optional chains cannot be assignment targets", { start });
