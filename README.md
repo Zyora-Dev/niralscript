@@ -184,8 +184,8 @@ instance.updateInputs({ initial: 8 });
 A host can pass a compatible runtime as the third argument:
 `createInstance(inputs, globals, runtime)`. It must provide
 `signal(initial) -> { get, set }` and `derived(compute) -> { get }` and preserve
-immediate reads, instance isolation and cycle safety. This is an integration
-interface, not a finished React or Next.js adapter.
+immediate reads, instance isolation and cycle safety. This is the low-level
+integration interface the official adapters are built on.
 
 ## Niral and Other Frameworks
 
@@ -194,8 +194,12 @@ component compiler, server/client boundaries and fine-grained runtime. `.niral`
 remains the framework's component format; `.nrs` is the language's source format.
 Niral vendors the compiler to retain its own zero-dependency guarantee.
 
-React, Next.js and other framework adapters are **future work**, not included in
-this package. Standalone compilation works independently of any framework.
+Official adapters now carry the same compiled `.nrs` modules into other
+ecosystems: **`@niral/react`** (use a module as a reactive React component),
+**`@niral/vite`** (import `.nrs` files directly in any Vite app), and
+**`@niral/next`** (Next.js App Router Client Components). Each is a thin,
+zero-dependency layer over the standalone compiler output. Standalone
+compilation still works independently of any framework.
 
 The published [Niral VS Code extension](https://marketplace.visualstudio.com/items?itemName=zyoralabs.niral-vscode)
 supports `.nrs` highlighting, snippets, diagnostics, hover, completions and
