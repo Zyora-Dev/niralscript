@@ -218,10 +218,15 @@ function safe(term: tainted<string>): string {
 }
 ```
 
-- A value is tainted when it is annotated `tainted<T>`, and the taint propagates
-  through assignment, aliasing, member access, string `+` concatenation, template
-  literals and conditional/logical expressions. A tainted sub-expression taints
-  the whole expression.
+- A value is tainted when it is annotated `tainted<T>`, or when its binding kind is
+  a configured taint source. The checker accepts `taintSources` (an array of binding
+  kinds, for example `["input"]`), so a host can mark whole classes of untrusted
+  data without per-value annotations — Niral marks request-bound `input` this way, so
+  request data is untrusted by default on the server. The option is opt-in: with no
+  `taintSources`, only explicit `tainted<T>` annotations are tracked (backward compatible).
+- Taint propagates through assignment, aliasing, member access, string `+`
+  concatenation, template literals and conditional/logical expressions. A tainted
+  sub-expression taints the whole expression.
 - The taint is cleared only by an explicit launder: `contract<T>(value)` (which
   also validates the shape), `sanitize(value)` or `trust(value)`. The escape hatch
   is a named call, so a reviewer can find every bypass with one grep for `trust(`.

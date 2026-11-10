@@ -28,7 +28,7 @@ export function decoratorExpressions(node) {
   return own.length || members.length ? [...own, ...members].map(decorator => decorator.expression) : EMPTY_CHILDREN;
 }
 
-export function analyzeNiralScript(program, { globals = [], moduleGlobals = globals, reserved = [], pureGlobals = [], pureMethods = {}, strictTypes = false, topLevelAwait = false } = {}) {
+export function analyzeNiralScript(program, { globals = [], moduleGlobals = globals, reserved = [], pureGlobals = [], pureMethods = {}, strictTypes = false, topLevelAwait = false, taintSources = [] } = {}) {
   const bindings = [];
   const references = [];
   const resolved = new WeakMap();
@@ -957,6 +957,6 @@ export function analyzeNiralScript(program, { globals = [], moduleGlobals = glob
     for (const node of module.body) initialized(node, node.start);
   }
   const analysis = { bindings, references, root, imports, arrows, resolved, declarations, classes, classContexts, classOf, memberOf, constructorOf, baseOf, isStaticReceiver, topLevelAwait: awaited };
-  checkTypes(program, analysis, { strictTypes });
+  checkTypes(program, analysis, { strictTypes, taintSources });
   return analysis;
 }

@@ -216,9 +216,9 @@ export function walk(node, visit) {
   }
 }
 
-export function checkTypes(program, analysis, { strictTypes = false } = {}) {
+export function checkTypes(program, analysis, { strictTypes = false, taintSources = [] } = {}) {
   const annotations = hasTypeSyntax(program) ? typeAnnotations(program) : [];
-  if (!strictTypes && !analysis.classes.length && !annotations.length && ![...(program.modules ?? []), program].some(owner => owner.body.some(node => node.typeOnly))) return;
+  if (!strictTypes && !taintSources.length && !analysis.classes.length && !annotations.length && ![...(program.modules ?? []), program].some(owner => owner.body.some(node => node.typeOnly))) return;
   const annotated = new Map();
   const declared = new Map(analysis.bindings.map(binding => [binding.id, binding]));
   const functions = [];
@@ -928,7 +928,7 @@ export function checkTypes(program, analysis, { strictTypes = false } = {}) {
     if (fn.body.type === "BlockStatement" && !terminates(fn.body)) check(expected, UNDEFINED, fn.returnType ?? fn);
   }
 
-  checkTaint(program, analysis, { annotated, infer, typeOf, calls });
+  checkTaint(program, analysis, { annotated, calls, taintSources: new Set(taintSources) });
 }
 
 // A call that strips taint: contract<T>(x) validates, sanitize/trust explicitly launder.
@@ -936,9 +936,11 @@ const LAUNDER_CALLS = new Set(["sanitize", "trust"]);
 // Dangerous sinks keyed by receiver.method; value is the 0-based index of the injectable argument.
 const TAINT_SINKS = new Map([["sql.query", 0]]);
 
-// Compile-enforced taint tracking: untrusted (tainted<T>) data may not reach a dangerous
-// sink unless laundered through contract<T>(), sanitize() or trust(). Raises NRS090.
-function checkTaint(program, analysis, { annotated, infer, typeOf, calls }) {
+// Compile-enforced taint tracking: untrusted data may not reach a dangerous sink unless
+// laundered through contract<T>(), sanitize() or trust(). A value is untrusted when it is
+// annotated tainted<T>, or when its binding kind is a configured taint source (e.g. "input"
+// for request-bound data, marked by the Niral framework). Raises NRS090.
+function checkTaint(program, analysis, { annotated, calls, taintSources = new Set() }) {
   const taintFail = (message, node) => { throw new NiralScriptError("NRS090", message, sourceLocation(program, node)); };
   const resolved = analysis.resolved;
 
@@ -968,7 +970,7 @@ function checkTaint(program, analysis, { annotated, infer, typeOf, calls }) {
       case "Identifier": {
         const binding = resolved.get(node);
         if (!binding) return false;
-        if (annotated.get(binding)?.tainted) return true;
+        if (annotated.get(binding)?.tainted || taintSources.has(binding.kind)) return true;
         const declaration = analysis.declarations.get(binding);
         return declaration?.init ? tainted(declaration.init, seen) : false;
       }
