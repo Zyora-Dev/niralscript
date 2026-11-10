@@ -948,35 +948,72 @@ function checkTaint(program, analysis, { annotated, calls, taintSources = new Se
     if (node.type === "ContractExpression") return true;
     if (node.type !== "CallExpression") return false;
     const callee = node.callee;
-    return callee.type === "Identifier" && LAUNDER_CALLS.has(callee.name) && !resolved.get(callee);
+    if (callee.type !== "Identifier" || !LAUNDER_CALLS.has(callee.name)) return false;
+    // The launder must be the ambient sanitize/trust (unresolved or a global), never a user shadow.
+    const binding = resolved.get(callee);
+    return !binding || binding.kind === "global";
   }
 
-  // A value is tainted when it originates from a tainted<T> binding and has not been laundered.
+  // Every binding a tainted value flows into, tracked across reassignments and derivations.
+  const taintedBindings = new Set();
+
+  // Conservative (default-taint-on-contact) propagation: a value is tainted when it is
+  // derived from any tainted operand, unless it passes through an explicit launder. Only
+  // literals, pure constants and laundered results are trusted. This errs toward false
+  // positives (which are fixed by laundering) rather than silent bypasses.
   function tainted(node, seen = new Set()) {
     if (!node || seen.has(node)) return false;
     seen = new Set(seen).add(node);
     switch (node.type) {
       case "ParenthesizedExpression": return tainted(node.expression, seen);
+      case "SequenceExpression": return tainted(node.expressions[node.expressions.length - 1], seen);
       case "TemplateLiteral": return node.expressions.some(part => tainted(part, seen));
-      case "BinaryExpression": return node.operator === "+" && (tainted(node.left, seen) || tainted(node.right, seen));
+      case "BinaryExpression": return tainted(node.left, seen) || tainted(node.right, seen);
       case "LogicalExpression":
       case "ConditionalExpression": return ["left", "right", "consequent", "alternate"].some(key => node[key] && tainted(node[key], seen));
+      case "UnaryExpression":
+      case "UpdateExpression": return tainted(node.argument, seen);
+      case "AwaitExpression": case "YieldExpression": return tainted(node.argument, seen);
+      case "SpreadElement": return tainted(node.argument, seen);
       case "MemberExpression": return tainted(node.object, seen);
-      case "CallExpression": {
+      case "ArrayExpression": return node.elements.some(element => element && tainted(element, seen));
+      case "ObjectExpression":
+        return node.properties.some(prop => tainted(prop.value ?? prop.argument, seen));
+      case "CallExpression":
+      case "NewExpression": {
         if (launders(node)) return false;
-        // A method on a tainted receiver (e.g. tainted string .trim()) stays tainted.
-        return node.callee.type === "MemberExpression" && tainted(node.callee.object, seen);
+        // A non-laundering call carries taint out when its receiver or any argument is tainted.
+        const receiver = node.callee?.type === "MemberExpression" && tainted(node.callee.object, seen);
+        return receiver || node.arguments.some(argument => tainted(argument, seen));
       }
       case "Identifier": {
         const binding = resolved.get(node);
         if (!binding) return false;
-        if (annotated.get(binding)?.tainted || taintSources.has(binding.kind)) return true;
+        if (annotated.get(binding)?.tainted || taintSources.has(binding.kind) || taintedBindings.has(binding)) return true;
         const declaration = analysis.declarations.get(binding);
         return declaration?.init ? tainted(declaration.init, seen) : false;
       }
       default: return false;
     }
   }
+
+  // Seed the fixed point: every assignment or declaration of a tainted value taints its target.
+  function seedAssignments() {
+    let changed = true;
+    while (changed) {
+      changed = false;
+      walk(program, node => {
+        let target, value;
+        if ((node.type === "AssignmentExpression" || node.type === "AssignmentStatement") && node.operator === "=") { target = node.left; value = node.right; }
+        else if ((node.type === "VariableDeclaration" || node.type === "VariableDeclarator") && node.init) { target = node.id; value = node.init; }
+        else return;
+        if (target?.type !== "Identifier") return;
+        const binding = resolved.get(target);
+        if (binding && !taintedBindings.has(binding) && tainted(value)) { taintedBindings.add(binding); changed = true; }
+      });
+    }
+  }
+  seedAssignments();
 
   for (const node of calls) {
     if (node.type !== "CallExpression" || node.callee.type !== "MemberExpression" || node.callee.computed) continue;

@@ -224,9 +224,13 @@ function safe(term: tainted<string>): string {
   data without per-value annotations — Niral marks request-bound `input` this way, so
   request data is untrusted by default on the server. The option is opt-in: with no
   `taintSources`, only explicit `tainted<T>` annotations are tracked (backward compatible).
-- Taint propagates through assignment, aliasing, member access, string `+`
-  concatenation, template literals and conditional/logical expressions. A tainted
-  sub-expression taints the whole expression.
+- Propagation is conservative (taint-on-contact): a value is tainted whenever it is
+  derived from any tainted operand. Taint flows through assignment and reassignment,
+  aliasing, member access, array/object construction and spread, string `+` and
+  coercion, template literals, logical/conditional expressions, unary/update
+  operators, and the arguments and receiver of any non-laundering call. Only
+  literals, pure constants and laundered results are trusted, so there is no silent
+  bypass through an unmodeled expression shape.
 - The taint is cleared only by an explicit launder: `contract<T>(value)` (which
   also validates the shape), `sanitize(value)` or `trust(value)`. The escape hatch
   is a named call, so a reviewer can find every bypass with one grep for `trust(`.
