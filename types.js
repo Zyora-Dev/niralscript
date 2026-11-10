@@ -131,6 +131,7 @@ const ANY = { kind: "any" };
 const UNDEFINED = { kind: "undefined" };
 // recursive aliases make type values cyclic, so identity keys stand in for a repeat visit
 function identify(value, seen = new Map()) {
+  if (typeof value === "bigint") return `${value}n`;
   if (!value || typeof value !== "object") return JSON.stringify(value);
   if (seen.has(value)) return `#${seen.get(value)}`;
   seen.set(value, seen.size);
