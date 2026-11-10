@@ -210,8 +210,8 @@ standalone npm compiler does not include its own language server.
 
 This repository is the standalone source of record. The Niral workspace keeps a
 vendored copy; compiler changes must be synchronized deliberately.
-The framework-hosted suite currently contains 87 language tests plus 259
-framework tests, verified on 10 November 2026. A real npm tarball installation
+The framework-hosted suite currently contains 87 language tests plus 272
+framework tests, verified on 11 November 2026. A real npm tarball installation
 also passed API, CLI, generated runtime, isolation, input-update, source-map and
 error-path checks. These are verification results, not a stability guarantee.
 
