@@ -10,6 +10,7 @@
   },
   "files": [
     "*.js",
+    "test",
     "LICENSE",
     "README.md"
   ],
@@ -23,6 +24,7 @@
     "nrs": "./cli.js"
   },
   "scripts": {
+    "test": "node --test test/",
     "bench": "node bench/final-comparison.js",
     "bench:json": "node bench/final-comparison.js --json",
     "bench:injection": "node bench/injection-shootout.js"
