@@ -1,23 +1,34 @@
 {
   "name": "niralscript",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "NiralScript — the zero-dependency reactive language compiler by ZyoraLabs.",
   "author": "ZyoraLabs",
   "license": "Apache-2.0",
-  "repository": { "type": "git", "url": "git+https://github.com/Zyora-Dev/niralscript.git" },
-  "files": ["*.js", "LICENSE", "README.md"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zyora-Dev/niralscript.git"
+  },
+  "files": [
+    "*.js",
+    "LICENSE",
+    "README.md"
+  ],
   "type": "module",
   "exports": {
     ".": "./parser.js",
     "./check": "./check.js",
     "./compile": "./compile.js"
   },
-  "bin": { "nrs": "./cli.js" },
+  "bin": {
+    "nrs": "./cli.js"
+  },
   "scripts": {
     "bench": "node bench/final-comparison.js",
     "bench:json": "node bench/final-comparison.js --json",
     "bench:injection": "node bench/injection-shootout.js"
   },
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {}
 }
