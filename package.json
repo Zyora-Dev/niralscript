@@ -13,6 +13,11 @@
     "./compile": "./compile.js"
   },
   "bin": { "nrs": "./cli.js" },
+  "scripts": {
+    "bench": "node bench/final-comparison.js",
+    "bench:json": "node bench/final-comparison.js --json",
+    "bench:injection": "node bench/injection-shootout.js"
+  },
   "engines": { "node": ">=22" },
   "dependencies": {}
 }

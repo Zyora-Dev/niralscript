@@ -1,0 +1,63 @@
+name: Benchmark
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  final-comparison:
+    name: JS vs TS vs NiralScript (Node ${{ matrix.node }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install pinned TypeScript (dev-only, zero runtime deps)
+        run: npm install --no-save --no-package-lock --ignore-scripts typescript@5.7.3
+      - name: Run benchmarks (security · stability · efficiency · correctness)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark-results
+          printf 'Commit: %s\nRunner: %s/%s\n' "$GITHUB_SHA" "$RUNNER_OS" "$RUNNER_ARCH" > benchmark-results/environment.txt
+          node bench/final-comparison.js 2>&1 | tee "benchmark-results/final-comparison.log"
+          node bench/final-comparison.js --json="benchmark-results/final-comparison.json" > /dev/null
+          node bench/injection-shootout.js 2>&1 | tee "benchmark-results/injection-shootout.log"
+      - name: Upload benchmark results
+        if: always()
+        id: benchmark-artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-node-${{ matrix.node }}-${{ github.run_attempt }}
+          path: benchmark-results/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Summarize
+        if: always()
+        shell: bash
+        env:
+          NODE_MAJOR: ${{ matrix.node }}
+          RESULTS_URL: ${{ steps.benchmark-artifact.outputs.artifact-url }}
+        run: |
+          printf '## Benchmark — JS vs TypeScript vs NiralScript (Node %s)\n\n' "$NODE_MAJOR" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Commit: `%s`\n\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Four dimensions, every verdict produced by running the real toolchain: **security** (compile-time injection blocking), **stability** (deterministic output + clean rejection of malformed input), **efficiency** (compile throughput + output size), **correctness** (compiled NiralScript executes correctly). Hard assertions fail the job on any regression. Hosted-runner timings are noisy — relative signal only.\n\n' >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f benchmark-results/final-comparison.log ]]; then
+            printf '<details><summary>final-comparison.log</summary>\n\n```\n' >> "$GITHUB_STEP_SUMMARY"
+            cat benchmark-results/final-comparison.log >> "$GITHUB_STEP_SUMMARY"
+            printf '\n```\n\n</details>\n\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ -n "$RESULTS_URL" ]]; then
+            printf '[Download raw measurements](%s)\n' "$RESULTS_URL" >> "$GITHUB_STEP_SUMMARY"
+          fi
