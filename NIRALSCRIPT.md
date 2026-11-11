@@ -224,6 +224,18 @@ function safe(term: tainted<string>): string {
   data without per-value annotations — Niral marks request-bound `input` this way, so
   request data is untrusted by default on the server. The option is opt-in: with no
   `taintSources`, only explicit `tainted<T>` annotations are tracked (backward compatible).
+- Exported functions are remote-call entry points (RPCs): their arguments arrive from
+  the network. With `taintExportedParams`, every exported function's parameters are
+  tainted automatically, so an RPC argument reaching a sink unlaundered is `NRS090`
+  without any per-parameter annotation. `load` (the framework-controlled SSR loader)
+  is exempt, and non-exported helpers are unaffected. This is also opt-in and
+  backward compatible.
+
+  ```niralscript
+  // with taintExportedParams
+  export function run(q: string) { return sql.query(q) }            // NRS090 — RPC arg is untrusted
+  export function run(q: string) { return sql.query(sanitize(q)) }  // laundered — compiles
+  ```
 - Propagation is conservative (taint-on-contact): a value is tainted whenever it is
   derived from any tainted operand. Taint flows through assignment and reassignment,
   aliasing, member access, array/object construction and spread, string `+` and

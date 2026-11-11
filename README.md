@@ -160,6 +160,19 @@ function search(term: tainted<string>): string {
 }
 ```
 
+Hosts can declare whole binding kinds as taint sources with `taintSources`, and
+auto-taint the parameters of exported functions with `taintExportedParams`. The
+latter treats every exported function as a remote-call entry point (an RPC) whose
+arguments arrive from the network, so its parameters are untrusted by default and
+must be laundered before reaching a sink. `load` (the SSR data loader) is exempt,
+and non-exported helpers are unaffected.
+
+```text
+// with { taintExportedParams: true }
+export function run(q: string) { return sql.query(q) }            // NRS090 — RPC arg is untrusted
+export function run(q: string) { return sql.query(sanitize(q)) }  // laundered — compiles
+```
+
 ## Compiler APIs
 
 ```js

@@ -216,9 +216,9 @@ export function walk(node, visit) {
   }
 }
 
-export function checkTypes(program, analysis, { strictTypes = false, taintSources = [] } = {}) {
+export function checkTypes(program, analysis, { strictTypes = false, taintSources = [], taintExportedParams = false } = {}) {
   const annotations = hasTypeSyntax(program) ? typeAnnotations(program) : [];
-  if (!strictTypes && !taintSources.length && !analysis.classes.length && !annotations.length && ![...(program.modules ?? []), program].some(owner => owner.body.some(node => node.typeOnly))) return;
+  if (!strictTypes && !taintSources.length && !taintExportedParams && !analysis.classes.length && !annotations.length && ![...(program.modules ?? []), program].some(owner => owner.body.some(node => node.typeOnly))) return;
   const annotated = new Map();
   const declared = new Map(analysis.bindings.map(binding => [binding.id, binding]));
   const functions = [];
@@ -928,7 +928,7 @@ export function checkTypes(program, analysis, { strictTypes = false, taintSource
     if (fn.body.type === "BlockStatement" && !terminates(fn.body)) check(expected, UNDEFINED, fn.returnType ?? fn);
   }
 
-  checkTaint(program, analysis, { annotated, calls, taintSources: new Set(taintSources) });
+  checkTaint(program, analysis, { annotated, calls, taintSources: new Set(taintSources), taintExportedParams });
 }
 
 // A call that strips taint: contract<T>(x) validates; sanitize/trust/escape explicitly launder.
@@ -942,10 +942,16 @@ const HTML_SINKS = new Map([["html", 0], ["raw", 0], ["unsafeHTML", 0], ["render
 // Compile-enforced taint tracking: untrusted data may not reach a dangerous sink unless
 // laundered through contract<T>(), sanitize() or trust(). A value is untrusted when it is
 // annotated tainted<T>, or when its binding kind is a configured taint source (e.g. "input"
-// for request-bound data, marked by the Niral framework). Raises NRS090.
-function checkTaint(program, analysis, { annotated, calls, taintSources = new Set() }) {
+// for request-bound data, marked by the Niral framework). When taintExportedParams is set,
+// the parameters of every exported function are untrusted too — in a Niral <server> block an
+// exported function is an RPC whose arguments come straight from the network. Raises NRS090.
+function checkTaint(program, analysis, { annotated, calls, taintSources = new Set(), taintExportedParams = false }) {
   const taintFail = (message, node) => { throw new NiralScriptError("NRS090", message, sourceLocation(program, node)); };
   const resolved = analysis.resolved;
+
+  // A parameter binding belongs to a param pattern when its declaration site is spanned by it;
+  // this also covers destructured params like ({ id }) or ([first]).
+  const isParamBinding = (binding, param) => binding.id.start >= param.start && binding.id.end <= param.end;
 
   function launders(node) {
     if (node.type === "ContractExpression") return true;
@@ -959,6 +965,20 @@ function checkTaint(program, analysis, { annotated, calls, taintSources = new Se
 
   // Every binding a tainted value flows into, tracked across reassignments and derivations.
   const taintedBindings = new Set();
+
+  // Exported functions in a <server> block are RPCs: their arguments arrive from the network,
+  // so every parameter binding is untrusted. `load` is the SSR data loader, not an RPC, so it
+  // is exempt (its arguments are framework-controlled: params, locals).
+  if (taintExportedParams) {
+    for (const node of program.body ?? []) {
+      if (node.type !== "FunctionDeclaration" || !node.exported || node.id?.name === "load") continue;
+      for (const param of node.params) {
+        for (const binding of analysis.bindings) {
+          if (binding.kind === "parameter" && isParamBinding(binding, param)) taintedBindings.add(binding);
+        }
+      }
+    }
+  }
 
   // Conservative (default-taint-on-contact) propagation: a value is tainted when it is
   // derived from any tainted operand, unless it passes through an explicit launder. Only
